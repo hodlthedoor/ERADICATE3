@@ -1,5 +1,6 @@
 #include "hexadecimal.hpp"
 #include <stdexcept>
+#include <cstdint>
 
 std::string toHex(const uint8_t * const s, const size_t len) {
 	std::string b("0123456789abcdef");
