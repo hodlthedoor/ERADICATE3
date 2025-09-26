@@ -1,3 +1,5 @@
+#pragma OPENCL EXTENSION cl_khr_global_int32_base_atomics : enable
+
 enum ModeFunction {
 	Benchmark, ZeroBytes, Matching, Leading, Range, Mirror, Doubles, LeadingRange, Trailing
 };
@@ -80,8 +82,6 @@ __kernel void eradicate2_iterate(__global result * const pResult, __global const
 
 	sha3_keccakf(&h_create);
 	h = h_create;
-
-	 */
 	switch (pMode->function) {
 	case Benchmark:
 		eradicate2_score_benchmark(h.b + 12, pResult, pMode, scoreMax, deviceIndex, round);
