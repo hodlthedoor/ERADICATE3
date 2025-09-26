@@ -29,33 +29,58 @@ void eradicate2_score_doubles(const uchar * const hash, __global result * const 
 __kernel void eradicate2_iterate(__global result * const pResult, __global const mode * const pMode, const uchar scoreMax, const uint deviceIndex, const uint round) {
 	ethhash h = { .q = { ERADICATE2_INITHASH } };
 
-	// Salt have index h.b[21:52] inclusive, which covers WORDS with index h.d[6:12] inclusive (they represent h.b[24:51] inclusive)
-	// We use three out of those six words to generate a unique salt value for each device, thread and round. We ignore any overflows
-	// and assume that there'll never be more than 2**32 devices, threads or rounds. Worst case scenario with default settings
-	// of 16777216 = 2**24 threads means the assumption fails after a device has tried 2**32 * 2**24 = 2**56 salts, enough to match
-	// 14 characters in the address! A GTX 1070 with speed of ~700*10**6 combinations per second would hit this target after ~3 years.
-	h.d[6] += deviceIndex; 
+	h.d[6] += deviceIndex;
 	h.d[7] += get_global_id(0);
 	h.d[8] += round;
 
-	// Hash for CREATE2
+	uchar original_salt[32];
+	for (int i = 0; i < 32; i++) {
+		original_salt[i] = h.b[21 + i];
+	}
+
 	sha3_keccakf(&h);
 
-	// Hash for CREATE
-	ethhash h2 = { 0 };
-	h2.b[0] = 0xd6;
-	h2.b[1] = 0x94;
-	for (int i = 0; i < 20; i++) {
-		h2.b[2 + i] = h.b[12 + i];
-	}
-	h2.b[22] = 0x01;
-	h2.b[23] ^= 0x01; // IDK why but it works
-	sha3_keccakf(&h2);
-	h = h2;
+	ethhash h_create2 = { 0 };
 
-	/* enum class ModeFunction {
-	 *      Benchmark, ZeroBytes, Matching, Leading, Range, Mirror, Doubles, LeadingRange
-	 * };
+	h_create2.b[0] = 0xff;
+
+	h_create2.b[1] = 0xBA; h_create2.b[2] = 0x20; h_create2.b[3] = 0x3f; h_create2.b[4] = 0xFD;
+	h_create2.b[5] = 0xB6; h_create2.b[6] = 0x72; h_create2.b[7] = 0x7c; h_create2.b[8] = 0x59;
+	h_create2.b[9] = 0xe3; h_create2.b[10] = 0x1D; h_create2.b[11] = 0x73; h_create2.b[12] = 0xd6;
+	h_create2.b[13] = 0x62; h_create2.b[14] = 0x90; h_create2.b[15] = 0xFF; h_create2.b[16] = 0xb4;
+	h_create2.b[17] = 0x77; h_create2.b[18] = 0x28; h_create2.b[19] = 0xe4; h_create2.b[20] = 0xCb;
+
+	for (int i = 0; i < 32; i++) {
+		h_create2.b[21 + i] = original_salt[i];
+	}
+
+	h_create2.b[53] = 0x21; h_create2.b[54] = 0xc3; h_create2.b[55] = 0x5d; h_create2.b[56] = 0xbe;
+	h_create2.b[57] = 0x1b; h_create2.b[58] = 0x34; h_create2.b[59] = 0x4a; h_create2.b[60] = 0x24;
+	h_create2.b[61] = 0x88; h_create2.b[62] = 0xcf; h_create2.b[63] = 0x33; h_create2.b[64] = 0x21;
+	h_create2.b[65] = 0xd6; h_create2.b[66] = 0xce; h_create2.b[67] = 0x54; h_create2.b[68] = 0x2f;
+	h_create2.b[69] = 0x8e; h_create2.b[70] = 0x9f; h_create2.b[71] = 0x30; h_create2.b[72] = 0x55;
+	h_create2.b[73] = 0x44; h_create2.b[74] = 0xff; h_create2.b[75] = 0x09; h_create2.b[76] = 0xe4;
+	h_create2.b[77] = 0x99; h_create2.b[78] = 0x3a; h_create2.b[79] = 0x62; h_create2.b[80] = 0x31;
+	h_create2.b[81] = 0x9a; h_create2.b[82] = 0x49; h_create2.b[83] = 0x7c; h_create2.b[84] = 0x1f;
+
+	h_create2.b[85] ^= 0x01;
+
+	sha3_keccakf(&h_create2);
+
+	ethhash h_create = { 0 };
+	h_create.b[0] = 0xd6;
+	h_create.b[1] = 0x94;
+
+	for (int i = 0; i < 20; i++) {
+		h_create.b[2 + i] = h_create2.b[12 + i];
+	}
+	h_create.b[22] = 0x01;
+
+	h_create.b[23] ^= 0x01;
+
+	sha3_keccakf(&h_create);
+	h = h_create;
+
 	 */
 	switch (pMode->function) {
 	case Benchmark:
@@ -98,17 +123,13 @@ __kernel void eradicate2_iterate(__global result * const pResult, __global const
 
 void eradicate2_result_update(const uchar * const H, __global result * const pResult, const uchar score, const uchar scoreMax, const uint deviceIndex, const uint round) {
 	if (score && score > scoreMax) {
-		const uchar hasResult = atomic_inc(&pResult[score].found); // NOTE: If "too many" results are found it'll wrap around to 0 again and overwrite last result. Only relevant if global worksize exceeds MAX(uint).
+		const uchar hasResult = atomic_inc(&pResult[score].found);
 
-		// Save only one result for each score, the first.
 		if (hasResult == 0) {
-			// Reconstruct state with hash and extract salt
 			ethhash h = { .q = { ERADICATE2_INITHASH } };
 			h.d[6] += deviceIndex;
 			h.d[7] += get_global_id(0);
 			h.d[8] += round;
-
-			ethhash be;
 
 			for (int i = 0; i < 32; ++i) {
 				pResult[score].salt[i] = h.b[i + 21];
